@@ -2,6 +2,7 @@ package cz.hofmanladislav.kas.hammington;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.Random;
 
 public class Main {
 
@@ -12,29 +13,51 @@ public class Main {
     private final static String ENCODED_FILE_NAME = "src/cz/hofmanladislav/kas/hammington/swiss-flag2.bin";
     private final static String DECODED_FILE_NAME = "src/cz/hofmanladislav/kas/hammington/swiss-flag3.bmp";
 
+    /*private final static String FILE_NAME = "src/cz/hofmanladislav/kas/hammington/soubor.txt";
+    private final static String ENCODED_FILE_NAME = "src/cz/hofmanladislav/kas/hammington/soubor2.txt";
+    private final static String DECODED_FILE_NAME = "src/cz/hofmanladislav/kas/hammington/soubor3.txt";*/
+
     private static BinaryFiles binary = new BinaryFiles();
 
     public static void main(String[] args) throws IOException {
 
-        readEncodeWrite(FILE_NAME, ENCODED_FILE_NAME);
+        readEncodeWrite(FILE_NAME, ENCODED_FILE_NAME); // nacteni, zakodovani, zapsani do souboru
 
-        readDecodeWrite(ENCODED_FILE_NAME, DECODED_FILE_NAME);
+        readDecodeWrite(ENCODED_FILE_NAME, DECODED_FILE_NAME); // nacteni, dekodovani, zapsani do souboru
 
     }
 
     public static void readEncodeWrite(String fileName, String encodedFileName) throws IOException {
-        byte[] bytes = binary.readBinaryFile(fileName);
-        byte[] bArray = stringToByteArray(encodeByteArrayToStringBuilder(bytes).toString());// osetrit kolik se na konci pridalo bitu
-        binary.writeBinaryFile(bArray, encodedFileName);
+        byte[] bytes = binary.readBinaryFile(fileName); // nacteni souboru do pole bytu
+        StringBuilder code = encodeByteArrayToStringBuilderHamming(bytes); // zakodovani do hammingova kodu
+
+        code = generateErrors(code, 1000); // vygenerovani poctu chyb do vysledneho kodu
+
+        byte addedBits = (byte)(8-code.length()%8); // vypocet pridanych bitu do posledniho byte
+        byte[] bArray = new byte[code.length()/8+2]; // definice vysledneho pole, ktere bude ulozeno do souboru
+        byte[] bCode = stringBuilderToByteArray(code); // prevod hammingovakodu na pole bytu
+        bArray[0] = addedBits; // do prvniho byte v souboru je ulozen pocet pridanych bitu do posledniho byte souboru
+        for (int i = 0; i < bCode.length; i++) {
+            bArray[i+1] = bCode[i]; // prekopirovani pole s hammingovym kodem do vystupniho pole
+        }
+        binary.writeBinaryFile(bArray, encodedFileName); // zapis vystupniho pole bytu do souboru
     }
 
-    public static void readDecodeWrite(String encodedFileName, String dencodedFileName) throws IOException {
-        byte[] bytes = binary.readBinaryFile(encodedFileName);
-        StringBuilder code = new StringBuilder();
-        for (byte b : bytes) code.append(byteToString(b));// nechat ten byte s udajem o pridanych bitech v kodu a pracovat s nim az po prevodu na String
-        for (int i = 0; i < code.length(); i+=13) {
-            //TODO vzit 13 bitu, prevest pres short na byte[2], zkontrolovat spravnost, vytahnout z toho jeden byte, vlozit do pole
+    public static void readDecodeWrite(String encodedFileName, String decodedFileName) throws IOException {
+        byte[] bytes = binary.readBinaryFile(encodedFileName); // nacteni souboru
+        StringBuilder code = loadCodeFromByteArray(bytes); // nacteni kodu do retezce bitu
+        code = fixLastByteInLoadedCoode(bytes, code); // oprava posledniho byte o pridane bity
+
+        byte[] output = new byte[(code.length()-8)/13]; // definice vystupniho pole bytu
+        for (int i = 8; i+13 <= code.length(); i+=13) { // prochazeni kodu
+            byte[] singleCode = shortToByteArray(Short.parseShort(code.substring(i,i+13), 2)); // nactenych 13 bitu prevedeno na byte[2]
+            calculateSyndromsFromHammingCode(singleCode); // vypocet syndromu
+            s = getPositionFromSyndroms(s0, s1, s2, s3); // vypocet pozice chybneho bitu
+            byte[] fixedCode = fixCodeViaSolvingTable(singleCode); // pripadna oprava - dle rozhodovaci tabulky
+            output[(i-8)/13] = getByteFromHamming(fixedCode); // prevod z hammingova kodu zpet na jeden byte
         }
+
+        binary.writeBinaryFile(output, decodedFileName); // zapis do souboru
     }
 
     private static String byteToString(byte b) {
@@ -61,8 +84,13 @@ public class Main {
         return 48; // 0
     }
 
+    private static byte stringToByte(String s) {
+        byte[] bytes = shortToByteArray(Short.parseShort(s, 2));
+        return bytes[1];
+    }
+
     private static StringBuilder getHammingFromByte(byte b) {
-        // Rozsiri byte o parity a zapise do 2byte Short
+        // Rozsiri byte o parity a zapise do StringBuilderu jako retezec 13 znaku (0,1)
 
         boolean a1 = getBoolFromLowByte(getBitFromByte(b, 7));
         boolean a2 = getBoolFromLowByte(getBitFromByte(b, 6));
@@ -125,7 +153,7 @@ public class Main {
     }
 
     private static void calculateSyndromsFromHammingCode(byte[] b) {
-        // spocita syndromy z kodu ulozeneho v shortu (2 byte)
+        // spocita syndromy z kodu, dle ni se pak da urcit chybny bit
         boolean cx = getBoolFromLowByte(getBitFromByte(b[0], 4));
         boolean c1 = getBoolFromLowByte(getBitFromByte(b[0], 3));
         boolean c2 = getBoolFromLowByte(getBitFromByte(b[0], 2));
@@ -145,7 +173,7 @@ public class Main {
         s2 = c4 ^ c5 ^ c6 ^ c7 ^ c12;
         s3 = c8 ^ c9 ^ c10 ^ c11 ^ c12;
 
-        // CHYBA na tabuli a v zadani, soucasti "sx" musi byt i kontrolni parita "cx"
+        // CHYBA na tabuli (v zadani), soucasti "sx" musi byt i kontrolni parita "cx"
         sx = cx ^ c1 ^ c2 ^ c3 ^ c4 ^ c5 ^ c6 ^ c7 ^ c8 ^ c9 ^ c10 ^ c11 ^ c12;
     }
 
@@ -165,9 +193,26 @@ public class Main {
         return b;
     }
 
+    /*private static byte[] fixBitInCode(byte[] b, int position) {
+        // zneguje bit na dane pozici v kodu
+        StringBuilder sb = new StringBuilder(byteToString(b[0]) + byteToString(b[1]));
+        if (sb.charAt(position) == 49) //1
+            sb.replace(position, position+1, "0");
+        else
+            sb.replace(position, position+1, "1");
+        return stringBuilderToByteArray(sb);
+    }*/
+
     private static byte[] fixCodeViaSolvingTable(byte[] b) {
+        /* Dle rozhodovaci tabulky opravi chybny bit v kodu
+         *      S  Sx
+         *      0  0  OK, bez chyby
+         *   != 0  0  2x chyba
+         *      0  1  3x chyba
+         *   != 0  1  1x chyba, mozno opravit chybny bit
+         */
         if (s == 0 && !sx) {
-            System.out.println("Nebyla zaznamenana chyba");
+            //System.out.println("Nebyla zaznamenana chyba");
             return b;
         } else if (s != 0 && !sx) {
             System.out.println("Zaznamenana dvojnasobna chyba");
@@ -193,8 +238,9 @@ public class Main {
         boolean a1 = getBoolFromLowByte(getBitFromByte(b[1], 1));
         boolean a0 = getBoolFromLowByte(getBitFromByte(b[1], 0));
 
-        StringBuilder sb = new StringBuilder(boolToCharValue(a7));
-        sb.append(boolToCharValue(a6))
+        StringBuilder sb = new StringBuilder();
+        sb.append(boolToCharValue(a7))
+                .append(boolToCharValue(a6))
                 .append(boolToCharValue(a5))
                 .append(boolToCharValue(a4))
                 .append(boolToCharValue(a3))
@@ -208,29 +254,56 @@ public class Main {
         return result[1];
     }
 
-    private static StringBuilder encodeByteArrayToStringBuilder(byte[] b) {
+    private static StringBuilder encodeByteArrayToStringBuilderHamming(byte[] b) {
+        // zakoduje pole bytu do hammingova kodu
         StringBuilder sb = new StringBuilder();
         for (byte aB : b) sb.append(getHammingFromByte(aB));
         return sb;
     }
 
-    private static byte[] stringToByteArray(String s) {
-        // Rozparsovani Stringu o tbvaru 1101010111010101.... na pole bajtu
+    private static byte[] stringBuilderToByteArray(StringBuilder s) {
+        // projde cely retezec kodu a rozparsuje jej do pole bytu
         byte[] output = new byte[s.length()/8+1];
-        int i = 0;
-        String parse = "";
-        int end = 0;
+        int i = 0; // pocatecni pozice parsovani (dale vypocitana)
+        int end = 0;// koncova pozice parsovani
         while (end != s.length()) {
             if (s.length() < i*8+8) end = s.length(); else end = i*8+8; //osetreni konce parsovaneho stringu
-            parse = s.substring(i*8, end);
-            short a = Short.parseShort(parse, 2); // parsovani shortu ze stringu o tvaru "10101010"
-            ByteBuffer bb = ByteBuffer.allocate(2).putShort(a);
-            byte[] array = bb.array();
+            String bits = s.substring(i*8, end);
+            byte[] array = shortToByteArray(Short.parseShort(bits, 2)); // parsovani shortu ze stringu o tvaru "10101010"
             output[i] = array[1]; // pozadovany byte ulozen v array[1]
             i++;
         }
         return output;
     }
 
+    private static StringBuilder loadCodeFromByteArray(byte[] b) {
+        // prevod na retezec bitu bez posledniho byte z pole
+        StringBuilder code = new StringBuilder();
+        for (int i = 0; i < b.length-1; i++)
+            code.append(byteToString(b[i]));
+        return code;
+    }
 
+    private static StringBuilder fixLastByteInLoadedCoode(byte[] b, StringBuilder code) {
+        // opravi posledni bit a pripoji jej ke kodu
+        byte addedBits = stringToByte(code.substring(0,8)); // pocet pridanych bitu do posledniho byte
+        byte lastByte = b[b.length-1]; // posledni byte ze souboru
+        for (int i = 0; i < addedBits; i++)
+            lastByte = (byte)(lastByte << 1); // bitovy posun o pridane bity
+        code.append(byteToString(lastByte)); // pripojeni k retezci bitu
+        return code;
+    }
+
+    private static StringBuilder generateErrors(StringBuilder code, int frequency) {
+        // vygeneruje chyby v kodu. frequency oznacuje pocet chyb
+        Random rand = new Random();
+
+        for (int i = 0; i < frequency; i++) {
+            int changedBit = rand.nextInt(code.length());
+            if (code.charAt(changedBit) == 49) // 1
+                code.replace(changedBit, changedBit+1, "0");
+            else code.replace(changedBit, changedBit+1, "1");
+        }
+        return code;
+    }
 }
